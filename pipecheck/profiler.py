@@ -48,6 +48,21 @@ class ProfileReport:
             "columns": {name: cp.to_dict() for name, cp in self.column_profiles.items()},
         }
 
+    def high_null_columns(self, threshold: float = 0.5) -> List[str]:
+        """Return column names where the null rate exceeds the given threshold.
+
+        Args:
+            threshold: Null rate threshold (0.0 to 1.0). Defaults to 0.5.
+
+        Returns:
+            List of column names with null_rate > threshold.
+        """
+        return [
+            name
+            for name, cp in self.column_profiles.items()
+            if cp.null_rate > threshold
+        ]
+
 
 def profile_records(records: List[Dict[str, Any]]) -> ProfileReport:
     """Generate a ProfileReport from a list of record dicts."""
