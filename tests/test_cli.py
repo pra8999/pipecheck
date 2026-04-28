@@ -72,6 +72,16 @@ def test_build_parser_defaults():
     assert args.output == "text"
 
 
+def test_build_parser_all_options():
+    """Verify that all CLI options are parsed correctly when explicitly provided."""
+    parser = build_parser()
+    args = parser.parse_args(["data.csv", "--schema", "schema.json", "--profile", "--output", "json"])
+    assert args.data == "data.csv"
+    assert args.schema == "schema.json"
+    assert args.profile is True
+    assert args.output == "json"
+
+
 def test_cli_main_valid_json_output(json_data_file, schema_file, capsys):
     with patch("sys.argv", ["pipecheck", json_data_file, "--schema", schema_file, "--output", "json"]):
         with pytest.raises(SystemExit) as exc_info:
