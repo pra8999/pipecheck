@@ -37,6 +37,14 @@ class ValidationResult:
     def error_count(self) -> int:
         return len(self.errors)
 
+    def errors_for_column(self, column: str) -> List[ValidationError]:
+        """Return all errors associated with a specific column name."""
+        return [e for e in self.errors if e.column == column]
+
+    def errors_for_row(self, row: int) -> List[ValidationError]:
+        """Return all errors associated with a specific row index."""
+        return [e for e in self.errors if e.row == row]
+
 
 def _check_column(row_idx: int, col: ColumnSchema, value: Any) -> List[ValidationError]:
     errors: List[ValidationError] = []
