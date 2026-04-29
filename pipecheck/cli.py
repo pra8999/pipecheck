@@ -1,35 +1,34 @@
 """CLI entry point for pipecheck."""
 
+from __future__ import annotations
+
 import argparse
+import csv
 import json
 import sys
 from pathlib import Path
+from typing import List, Dict, Any
 
 from pipecheck.schema import PipeSchema
-from pipecheck.validator import Validator
-from pipecheck.profiler import Profiler
+from pipecheck.validator import ValidationResult
+from pipecheck.profiler import ProfileReport
 from pipecheck.reporter import PipelineReport
+from pipecheck.sampler import DataSampler
 
 
-def load_records(file_path: str) -> list[dict]:
-    path = Path(file_path)
-    if not path.exists():
-        print(f"Error: File not found: {file_path}", file=sys.stderr)
-        sys.exit(1)
-
-    suffix = path.suffix.lower()
-    if suffix == ".json":
-        with open(path) as f:
-            data = json.load(f)
+def load_records(path: str) -> List[Dict[str, Any]]:
+    """Load records from a JSON or CSV file."""
+    p = Path(path)
+    if p.suffix.lower() == ".json":
+        with p.open() as fh:
+            data = json.load(fh)
         return data if isinstance(data, list) else [data]
-    elif suffix == ".csv":
-        import csv
-        with open(path, newline="") as f:
-            reader = csv.DictReader(f)
+    elif p.suffix.lower() == ".csv":
+        with p.open(newline="") as fh:
+            reader = csv.DictReader(fh)
             return list(reader)
     else:
-        print(f"Error: Unsupported file format '{suffix}'. Use .csv or .json", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"Unsupported file format: {p.suffix}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -37,47 +36,91 @@ def build_parser() -> argparse.ArgumentParser:
         prog="pipecheck",
         description="Validate and profile CSV/JSON data pipelines.",
     )
-    parser.add_argument("data", help="Path to data file (.csv or .json)")
-    parser.add_argument("--schema", help="Path to schema JSON file", default=None)
-    parser.add_argument("--profile", action="store_true", help="Include profiling report")
-    parser.add_argument("--output", choices=["text", "json"], default="text", help="Output format")
+    parser.add_argument("data", help="Path to the data file (CSV or JSON)")
+    parser.add_argument("--schema", help="Path to schema JSON file")
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Print a random sample of N records before validation",
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=None,
+        metavar="SEED",
+        help="Random seed for reproducible sampling",
+    )
+    parser.add_argument(
+        "--profile", action="store_true", help="Display column profile report"
+    )
+    parser.add_argument(
+        "--output",
+        choices=["text", "json"],
+        default="text",
+        help="Output format (default: text)",
+    )
     return parser
 
 
-def main():
+def main(argv: list[str] | None = None) -> int:  # type: ignore[type-arg]
     parser = build_parser()
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
-    records = load_records(args.data)
+    try:
+        records = load_records(args.data)
+    except (ValueError, FileNotFoundError) as exc:
+        print(f"Error loading data: {exc}", file=sys.stderr)
+        return 1
 
-    schema = None
+    # Optional sampling preview
+    if args.sample > 0:
+        sampler = DataSampler(seed=args.sample_seed)
+        sample_result = sampler.random_sample(records, n=args.sample)
+        if args.output == "json":
+            print(json.dumps(sample_result.to_dict(), indent=2))
+        else:
+            print(f"--- Sample ({sample_result.sample_size}/{sample_result.total_records} records) ---")
+            for rec in sample_result.records:
+                print(rec)
+        return 0
+
+    schema: PipeSchema | None = None
     if args.schema:
-        with open(args.schema) as f:
-            schema_data = json.load(f)
-        schema = PipeSchema.from_dict(schema_data)
+        try:
+            with open(args.schema) as fh:
+                schema = PipeSchema.from_dict(json.load(fh))
+        except (ValueError, FileNotFoundError) as exc:
+            print(f"Error loading schema: {exc}", file=sys.stderr)
+            return 1
 
-    validation_result = Validator(schema).validate(records) if schema else None
-    profile_report = Profiler().profile(records) if args.profile else None
+    profile = ProfileReport.from_records(records)
 
-    if validation_result is None and profile_report is None:
-        print("No schema or --profile flag provided. Nothing to do.", file=sys.stderr)
-        sys.exit(1)
-
-    if validation_result:
-        report = PipelineReport(validation=validation_result, profile=profile_report)
+    if args.profile:
         if args.output == "json":
-            print(json.dumps(report.to_dict(), indent=2))
+            print(json.dumps(profile.to_dict(), indent=2))
         else:
-            print(report.summary())
-        sys.exit(0 if validation_result.is_valid else 2)
-    elif profile_report:
-        if args.output == "json":
-            print(json.dumps(profile_report.to_dict(), indent=2))
-        else:
-            print(f"Records: {profile_report.record_count}")
-            for col, p in profile_report.columns.items():
-                print(f"  {col}: null_rate={p.null_rate:.1%}, unique={p.unique_count}")
+            print(profile)
+        return 0
+
+    if schema is None:
+        print("No schema provided. Use --schema to validate.", file=sys.stderr)
+        return 1
+
+    from pipecheck.validator import Validator  # type: ignore[attr-defined]
+
+    validator = Validator(schema)
+    validation = validator.validate(records)
+    report = PipelineReport(validation=validation, profile=profile)
+
+    if args.output == "json":
+        print(json.dumps(report.to_dict(), indent=2))
+    else:
+        print(report.summary())
+
+    return 0 if validation.is_valid else 1
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
